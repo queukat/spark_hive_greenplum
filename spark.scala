@@ -1,7 +1,7 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types._
-import java.sql.DriverManager
-import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
+
+import java.sql.{Connection, DriverManager}
 
 object HiveToGreenplum {
   def main(args: Array[String]): Unit = {
@@ -12,10 +12,34 @@ object HiveToGreenplum {
     val greenplumUser = args(3)
     val greenplumPassword = args(4)
     val useExternalTable = args(5).toBoolean // true - use external table, false - direct write
+    val externalTableName = args(6)
 
     // JDBC URL for Greenplum
     val greenplumJdbcUrl = s"jdbc:postgresql://$greenplumURL?user=$greenplumUser&password=$greenplumPassword"
-    
+
+    // Method to convert schema to SQL
+    def schemaToSql(schema: StructType, tableName: String): String = {
+      val columns = schema.fields.map { field =>
+        val name = field.name
+        val typeStr = field.dataType match {
+          case _: ByteType     => "INT"
+          case _: ShortType    => "INT"
+          case _: IntegerType  => "INT"
+          case _: LongType     => "BIGINT"
+          case _: FloatType    => "REAL"
+          case _: DoubleType   => "DOUBLE PRECISION"
+          case _: StringType   => "TEXT"
+          case _: BinaryType   => "BYTEA"
+          case _: BooleanType  => "BOOLEAN"
+          case _: TimestampType => "TIMESTAMP"
+          case _: DateType     => "DATE"
+          case _               => "TEXT"  // default to TEXT
+        }
+        s"$name $typeStr"
+      }
+      s"CREATE TABLE $tableName (${columns.mkString(", ")})"
+    }
+
     try {
       // Read the Hive table
       val hiveTableDF = spark.read.table(hiveTableName)
@@ -32,10 +56,23 @@ object HiveToGreenplum {
       }: _*)
 
       // Create table schema in Greenplum
-      val hiveTableSchema = castedDF.schema
-      val createTableSQL = JdbcUtils.schemaString(hiveTableSchema, "postgresql", greenplumTableName)
+      val createTableSQL = schemaToSql(castedDF.schema, greenplumTableName)
+      val insertDataSQL = s"INSERT INTO $greenplumTableName SELECT * FROM $externalTableName"
 
-      val conn = DriverManager.getConnection(greenplumJdbcUrl)
+      val cone: Connection = DriverManager.getConnection(greenplumJdbcUrl)
+
+      try {
+        val stmt = cone.createStatement()
+        stmt.execute(insertDataSQL)
+      } catch {
+        case e: Exception =>
+          println(s"Error while loading data from external table to Greenplum: ${e.getMessage}")
+          e.printStackTrace()
+      } finally {
+        cone.close()
+      }
+
+      val conn: Connection = DriverManager.getConnection(greenplumJdbcUrl)
       try {
         val stmt = conn.createStatement()
         stmt.execute(createTableSQL)
@@ -53,11 +90,11 @@ object HiveToGreenplum {
           .option("url", greenplumURL)
           .option("user", greenplumUser)
           .option("password", greenplumPassword)
-          .option("table", greenplumTableName)
+          .option("table", externalTableName)
           .mode("overwrite")
           .save()
 
-        println(s"Successfully created external table $greenplumTableName")
+        println(s"Successfully created external table $externalTableName")
       } else {
         // Write data directly to Greenplum
         castedDF.repartition(20).write // repartition data into 20 partitions for parallel writing
