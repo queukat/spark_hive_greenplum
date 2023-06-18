@@ -5,6 +5,30 @@ import org.apache.spark.sql.types._
 import java.sql.{Connection, DriverManager}
 
 object HiveToGreenplum {
+
+    // Method to convert schema to SQL
+    def schemaToSql(schema: StructType, tableName: String): String = {
+        val columns = schema.fields.map { field =>
+            val name = field.name
+            val typeStr = field.dataType match {
+                case _: ByteType => "INT"
+                case _: ShortType => "INT"
+                case _: IntegerType => "INT"
+                case _: LongType => "BIGINT"
+                case _: FloatType => "REAL"
+                case _: DoubleType => "DOUBLE PRECISION"
+                case _: StringType => "TEXT"
+                case _: BinaryType => "BYTEA"
+                case _: BooleanType => "BOOLEAN"
+                case _: TimestampType => "TIMESTAMP"
+                case _: DateType => "DATE"
+                case _ => "TEXT" // default to TEXT
+            }
+            s"$name $typeStr"
+        }
+        s"CREATE TABLE $tableName (${columns.mkString(", ")})"
+    }
+
     def main(args: Array[String]): Unit = {
         val spark = SparkSession.builder().appName("HiveToGreenplum").getOrCreate()
         val config = ConfigFactory.load()
@@ -19,30 +43,7 @@ object HiveToGreenplum {
 
         // JDBC URL for Greenplum
         val greenplumJdbcUrl = s"jdbc:postgresql://$greenplumURL?user=$greenplumUser&password=$greenplumPassword"
-
-        // Method to convert schema to SQL
-        def schemaToSql(schema: StructType, tableName: String): String = {
-            val columns = schema.fields.map { field =>
-                val name = field.name
-                val typeStr = field.dataType match {
-                    case _: ByteType => "INT"
-                    case _: ShortType => "INT"
-                    case _: IntegerType => "INT"
-                    case _: LongType => "BIGINT"
-                    case _: FloatType => "REAL"
-                    case _: DoubleType => "DOUBLE PRECISION"
-                    case _: StringType => "TEXT"
-                    case _: BinaryType => "BYTEA"
-                    case _: BooleanType => "BOOLEAN"
-                    case _: TimestampType => "TIMESTAMP"
-                    case _: DateType => "DATE"
-                    case _ => "TEXT" // default to TEXT
-                }
-                s"$name $typeStr"
-            }
-            s"CREATE TABLE $tableName (${columns.mkString(", ")})"
-        }
-
+        
         try {
             // Read the Hive table
             val hiveTableDF = spark.read.table(hiveTableName)
