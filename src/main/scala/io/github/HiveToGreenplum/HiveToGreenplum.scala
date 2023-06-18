@@ -1,104 +1,141 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.types import *
-import psycopg2
 import com.typesafe.config.ConfigFactory
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types._
 
-def schema_to_sql(schema, table_name):
-    type_mapping = {
-        ByteType: "INT",
-        ShortType: "INT",
-        IntegerType: "INT",
-        LongType: "BIGINT",
-        FloatType: "REAL",
-        DoubleType: "DOUBLE PRECISION",
-        StringType: "TEXT",
-        BinaryType: "BYTEA",
-        BooleanType: "BOOLEAN",
-        TimestampType: "TIMESTAMP",
-        DateType: "DATE"
+import java.sql.{Connection, DriverManager}
+
+object HiveToGreenplum {
+    def main(args: Array[String]): Unit = {
+        val spark = SparkSession.builder().appName("HiveToGreenplum").getOrCreate()
+        val config = ConfigFactory.load()
+        val hiveTableName = config.getString("hiveToGreenplum.hiveTableName")
+        val greenplumTableName = config.getString("hiveToGreenplum.greenplum_table_name")
+        val greenplumURL = config.getString("hiveToGreenplum.greenplum_url")
+        val greenplumUser = config.getString("hiveToGreenplum.greenplum_user")
+        val greenplumPassword = config.getString("hiveToGreenplum.greenplum_password")
+        val useExternalTable = config.getBoolean("hiveToGreenplum.useExternalTable")
+        val externalTableName = config.getString("hiveToGreenplum.external_table_name")
+
+
+        // JDBC URL for Greenplum
+        val greenplumJdbcUrl = s"jdbc:postgresql://$greenplumURL?user=$greenplumUser&password=$greenplumPassword"
+
+        // Method to convert schema to SQL
+        def schemaToSql(schema: StructType, tableName: String): String = {
+            val columns = schema.fields.map { field =>
+                val name = field.name
+                val typeStr = field.dataType match {
+                    case _: ByteType => "INT"
+                    case _: ShortType => "INT"
+                    case _: IntegerType => "INT"
+                    case _: LongType => "BIGINT"
+                    case _: FloatType => "REAL"
+                    case _: DoubleType => "DOUBLE PRECISION"
+                    case _: StringType => "TEXT"
+                    case _: BinaryType => "BYTEA"
+                    case _: BooleanType => "BOOLEAN"
+                    case _: TimestampType => "TIMESTAMP"
+                    case _: DateType => "DATE"
+                    case _ => "TEXT" // default to TEXT
+                }
+                s"$name $typeStr"
+            }
+            s"CREATE TABLE $tableName (${columns.mkString(", ")})"
+        }
+
+        try {
+            // Read the Hive table
+            val hiveTableDF = spark.read.table(hiveTableName)
+
+            // Automatically detect and cast the data types
+            val castedDF = hiveTableDF.select(hiveTableDF.columns.map { colName =>
+                val colType = hiveTableDF.schema(colName).dataType
+                colType match {
+                    case _: ByteType => hiveTableDF(colName).cast(IntegerType).as(colName)
+                    case _: ShortType => hiveTableDF(colName).cast(IntegerType).as(colName)
+                    case _: BinaryType => hiveTableDF(colName).cast(StringType).as(colName)
+                    case _ => hiveTableDF(colName)
+                }
+            }: _*)
+
+            // Create table schema in Greenplum
+            val createTableSQL = schemaToSql(castedDF.schema, greenplumTableName)
+            val insertDataSQL = s"INSERT INTO $greenplumTableName SELECT * FROM $externalTableName"
+
+            val cone: Connection = DriverManager.getConnection(greenplumJdbcUrl)
+
+            try {
+                val stmt = cone.createStatement()
+                stmt.execute(insertDataSQL)
+            } catch {
+                case e: Exception =>
+                    println(s"Error while loading data from external table to Greenplum: ${e.getMessage}")
+                    e.printStackTrace()
+            } finally {
+                cone.close()
+            }
+
+            val conn: Connection = DriverManager.getConnection(greenplumJdbcUrl)
+            try {
+                val stmt = conn.createStatement()
+                stmt.execute(createTableSQL)
+            } catch {
+                case e: Exception =>
+                    println(s"Error while creating table schema in Greenplum: ${e.getMessage}")
+                    e.printStackTrace()
+            } finally {
+                conn.close()
+            }
+
+            if (useExternalTable) {
+                // Create the Greenplum external table
+                castedDF.write.format("io.pivotal.greenplum.spark.GreenplumDataSource")
+                  .option("url", greenplumURL)
+                  .option("user", greenplumUser)
+                  .option("password", greenplumPassword)
+                  .option("table", externalTableName)
+                  .mode("overwrite")
+                  .save()
+
+                println(s"Successfully created external table $externalTableName")
+
+            } else {
+                // Write data directly to Greenplum
+                castedDF.repartition(20).write // repartition data into 20 partitions for parallel writing
+                  .format("io.pivotal.greenplum.spark.GreenplumRelationProvider")
+                  .option("url", greenplumURL)
+                  .option("user", greenplumUser)
+                  .option("password", greenplumPassword)
+                  .option("table", greenplumTableName)
+                  .mode("overwrite")
+                  .save()
+
+                println(s"Successfully wrote data to $greenplumTableName")
+            }
+
+            // Data integrity check
+            val greenplumCount = spark.read.format("io.pivotal.greenplum.spark.GreenplumRelationProvider")
+              .option("url", greenplumURL)
+              .option("user", greenplumUser)
+              .option("password", greenplumPassword)
+              .option("table", greenplumTableName)
+              .load()
+              .count()
+
+            val hiveCount = hiveTableDF.count()
+
+            if (greenplumCount == hiveCount) {
+                println("Data integrity check passed")
+            } else {
+                println("Data integrity check failed")
+            }
+
+        } catch {
+            case e: Exception =>
+                println(s"An error occurred during the migration: ${e.getMessage}")
+                e.printStackTrace()
+        } finally {
+            spark.stop()
+        }
     }
-    columns = [f"{field.name} {type_mapping.get(type(field.dataType), 'TEXT')}" for field in schema.fields]
-    return f"CREATE TABLE {table_name} ({', '.join(columns)})"
-
-def main():
-    spark = SparkSession.builder.appName("HiveToGreenplum").getOrCreate()
-
-    
-    val config = ConfigFactory.load()
-    val hive_table_name = config.getString("hiveToGreenplum.hiveTableName")
-    val greenplum_table_name = config.getString("hiveToGreenplum.greenplum_table_name")
-    val greenplum_url = config.getString("hiveToGreenplum.greenplum_url")
-    val greenplum_user = config.getString("hiveToGreenplum.greenplum_user")
-    val greenplum_password = config.getString("hiveToGreenplum.greenplum_password")
-    val use_external_table = config.getString("hiveToGreenplum.useExternalTable")
-    val external_table_name = config.getString("hiveToGreenplum.external_table_name")
-
-    greenplum_jdbc_url = f"jdbc:postgresql://{greenplum_url}?user={greenplum_user}&password={greenplum_password}"
-
-    try:
-        hive_table_df = spark.read.table(hive_table_name)
-        casted_df = hive_table_df.select([hive_table_df[col_name].cast(IntegerType()).alias(col_name) if type(hive_table_df.schema[col_name].dataType) in (ByteType, ShortType, BinaryType) else hive_table_df[col_name] for col_name in hive_table_df.columns])
-
-        create_table_sql = schema_to_sql(casted_df.schema, greenplum_table_name)
-        insert_data_sql = f"INSERT INTO {greenplum_table_name} SELECT * FROM {external_table_name}"
-
-        with psycopg2.connect(greenplum_jdbc_url) as conn:
-            with conn.cursor() as cur:
-                try:
-                    cur.execute(insert_data_sql)
-                except Exception as e:
-                    print(f"Error while loading data from external table to Greenplum: {str(e)}")
-                    raise e
-
-        with psycopg2.connect(greenplum_jdbc_url) as conn:
-            with conn.cursor() as cur:
-                try:
-                    cur.execute(create_table_sql)
-                except Exception as e:
-                    print(f"Error while creating table schema in Greenplum: {str(e)}")
-                    raise e
-
-        if use_external_table:
-            casted_df.write.format("io.pivotal.greenplum.spark.GreenplumDataSource") \
-                .option("url", greenplum_url) \
-                .option("user", greenplum_user) \
-                .option("password", greenplum_password) \
-                .option("table", external_table_name) \
-                .mode("overwrite") \
-                .save()
-            print(f"Successfully created external table {external_table_name}")
-        else:
-            casted_df.repartition(20).write \
-                .format("io.pivotal.greenplum.spark.GreenplumRelationProvider") \
-                .option("url", greenplum_url) \
-                .option("user", greenplum_user) \
-                .option("password", greenplum_password) \
-                .option("table", greenplum_table_name) \
-                .mode("overwrite") \
-                .save()
-            print(f"Successfully wrote data to {greenplum_table_name}")
-
-        greenplum_count = spark.read.format("io.pivotal.greenplum.spark.GreenplumRelationProvider") \
-            .option("url", greenplum_url) \
-            .option("user", greenplum_user) \
-            .option("password", greenplum_password) \
-            .option("table", greenplum_table_name) \
-            .load() \
-            .count()
-
-        hive_count = hive_table_df.count()
-
-        if greenplum_count == hive_count:
-            print("Data integrity check passed")
-        else:
-            print("Data integrity check failed")
-
-    except Exception as e:
-        print(f"An error occurred during the migration: {str(e)}")
-        raise e
-
-    finally:
-        spark.stop()
-
-if __name__ == "__main__":
-    main()
+}
