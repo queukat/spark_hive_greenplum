@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 import psycopg2
+import com.typesafe.config.ConfigFactory
 
 def schema_to_sql(schema, table_name):
     type_mapping = {
@@ -22,14 +23,15 @@ def schema_to_sql(schema, table_name):
 def main():
     spark = SparkSession.builder.appName("HiveToGreenplum").getOrCreate()
 
-    # Replace these with your actual arguments
-    hive_table_name = "hive_table_name"
-    greenplum_table_name = "greenplum_table_name"
-    greenplum_url = "greenplum_url"
-    greenplum_user = "greenplum_user"
-    greenplum_password = "greenplum_password"
-    use_external_table = True
-    external_table_name = "external_table_name"
+    
+    val config = ConfigFactory.load()
+    val hive_table_name = config.getString("hiveToGreenplum.hiveTableName")
+    val greenplum_table_name = config.getString("hiveToGreenplum.greenplum_table_name")
+    val greenplum_url = config.getString("hiveToGreenplum.greenplum_url")
+    val greenplum_user = config.getString("hiveToGreenplum.greenplum_user")
+    val greenplum_password = config.getString("hiveToGreenplum.greenplum_password")
+    val use_external_table = config.getString("hiveToGreenplum.useExternalTable")
+    val external_table_name = config.getString("hiveToGreenplum.external_table_name")
 
     greenplum_jdbc_url = f"jdbc:postgresql://{greenplum_url}?user={greenplum_user}&password={greenplum_password}"
 

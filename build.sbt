@@ -1,9 +1,13 @@
 name := "HiveToGreenplum"
 
-version := "1.0"
+version := "0.1"
 
-scalaVersion := "2.11.12"
+scalaVersion := "2.13.3"
 
-libraryDependencies += "org.apache.spark" %% "spark-sql" % "2.4.5"
-
-libraryDependencies += "io.pivotal.greenplum" %% "greenplum-spark" % "1.0.0"
+libraryDependencies ++= Seq(
+  "org.apache.spark" %% "spark-core" % "3.4.0",
+  "org.apache.spark" %% "spark-sql" % "3.4.0",
+  "org.postgresql" % "postgresql" % "42.2.5",
+  "org.scalatest" %% "scalatest" % "3.2.9" % Test,
+  "com.typesafe" % "config" % "1.4.1"
+)
