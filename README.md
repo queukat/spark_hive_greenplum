@@ -1,4 +1,8 @@
 # spark_hive_greenplum
+
+<!-- public-repo-status -->
+> Status: Legacy/reference. This repository is kept public for implementation notes, but it is not actively supported. Issues and pull requests are disabled unless support is reopened.
+
 # HiveToGreenplum
 
 HiveToGreenplum is a Spark application that reads a Hive table in ORC format and uploads it to a Greenplum database.
