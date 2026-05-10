@@ -1,15 +1,10 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# Legacy/reference repository CI.
+# Run this workflow manually when intentionally checking the old Scala project.
 
 name: Scala CI
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
