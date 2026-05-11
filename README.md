@@ -23,9 +23,6 @@ spark-submit --class HiveToGreenplum <path-to-jar> <hive-table-name> <greenplum-
 
 ## License
 
-This project is licensed under the MIT License.
-## License
-
 <!-- commercial-license-policy -->
 This project is licensed for non-commercial use under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/).
 Commercial use, resale, paid distribution, marketplace publication, SaaS hosting, or bundling into a paid product requires separate written permission from the author.
